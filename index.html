@@ -427,6 +427,7 @@ canvas#draw-canvas { flex:1; touch-action:none; cursor:crosshair; display:block;
     <div class="ai-panel">
       <div class="ai-row">
         <button class="ai-chip" onclick="toggleVoice()" id="voice-btn">🎤 Voice</button>
+        <input type="text" id="speech-input" style="position:absolute;opacity:0;pointer-events:none;width:1px;height:1px;" autocomplete="off">
         <button class="ai-chip" onclick="aiAction('summarize')">🧠 Summarize</button>
         <button class="ai-chip" onclick="aiAction('continue')">✍️ Continue</button>
         <button class="ai-chip" onclick="aiAction('fix')">✨ Fix Grammar</button>
@@ -1231,43 +1232,103 @@ function clearTrash() {
 // ══════════════════════════════════════════════════════
 // VOICE TO TEXT
 // ══════════════════════════════════════════════════════
-let recognition = null;
-let isListening = false;
-let voiceStopped = false; // tracks if user manually stopped (prevents iOS auto-restart)
+// WebView-compatible approach: uses a hidden input with speech recognition
+// This works in Median/Capacitor WebViews on both Android and iOS
+// because it delegates to the native OS keyboard mic, not the browser API.
 
+let isListening = false;
+let recognition = null;
+let voiceStopped = false;
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
 const isAndroid = /Android/.test(navigator.userAgent);
+const inWebView = !!(window.median || window.gonative || /wv/.test(navigator.userAgent) || (isAndroid && /Version\/\d/.test(navigator.userAgent)));
 
 function toggleVoice() {
   const btn = document.getElementById('voice-btn');
-  if(!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-    toast('Voice not supported — use Chrome or Safari'); return;
+
+  // In WebView: use native speech input approach
+  if(inWebView || isAndroid) {
+    useNativeSpeech(btn);
+    return;
   }
+
+  // In browser (Safari/Chrome): use Web Speech API
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR) { toast('Voice not supported in this browser'); return; }
+
   if(isListening) {
     voiceStopped = true;
-    recognition.stop();
+    recognition && recognition.stop();
     return;
   }
 
   voiceStopped = false;
+  navigator.mediaDevices && navigator.mediaDevices.getUserMedia({ audio: true })
+    .then(() => startWebSpeech(btn))
+    .catch(() => startWebSpeech(btn)); // try anyway even if getUserMedia fails
+}
 
-  if(isAndroid) {
-    // Android: skip getUserMedia, go straight to recognition (it handles its own permission prompt)
-    startVoice(btn);
-  } else {
-    // iOS & desktop: use getUserMedia to trigger permission popup first
-    navigator.mediaDevices.getUserMedia({ audio: true })
-      .then(() => startVoice(btn))
-      .catch(() => toast('Mic permission denied — allow it in settings'));
+function useNativeSpeech(btn) {
+  // Show a native prompt so the user can dictate using OS keyboard mic
+  // This works 100% in all WebViews because it's just a text input
+  const inp = document.getElementById('speech-input');
+
+  // Flash button to show it's active
+  btn.textContent = '🎤 Speak...';
+  btn.style.background = 'rgba(192,57,43,0.15)';
+  btn.style.color = 'var(--red)';
+  btn.style.borderColor = 'rgba(192,57,43,0.3)';
+
+  inp.value = '';
+  inp.style.opacity = '0';
+  inp.style.pointerEvents = 'none';
+
+  // Use a visible overlay input for dictation
+  const overlay = document.createElement('div');
+  overlay.id = 'voice-overlay';
+  overlay.style.cssText = `
+    position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:9999;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:24px;
+  `;
+  overlay.innerHTML = `
+    <div style="background:var(--card);border-radius:16px;padding:20px;width:100%;max-width:340px;">
+      <div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px;">🎤 Voice Input</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Tap the mic on your keyboard to dictate</div>
+      <textarea id="voice-textarea" rows="4" style="width:100%;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;font-family:var(--font);font-size:15px;color:var(--text);outline:none;resize:none;" placeholder="Speak or type here..."></textarea>
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button onclick="insertVoiceText()" style="flex:1;padding:10px;background:var(--accent);color:white;border:none;border-radius:10px;font-weight:700;font-size:14px;cursor:pointer;">Insert</button>
+        <button onclick="cancelVoice()" style="flex:1;padding:10px;background:var(--bg2);color:var(--text2);border:1px solid var(--border);border-radius:10px;font-weight:700;font-size:14px;cursor:pointer;">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  setTimeout(() => document.getElementById('voice-textarea').focus(), 100);
+
+  // Reset button
+  btn.textContent = '🎤 Voice';
+  btn.style.background = ''; btn.style.color = ''; btn.style.borderColor = '';
+}
+
+function insertVoiceText() {
+  const text = document.getElementById('voice-textarea').value.trim();
+  cancelVoice();
+  if(text) {
+    const body = document.getElementById('editor-body');
+    body.focus();
+    document.execCommand('insertText', false, text + ' ');
+    saveNote();
+    toast('Text inserted!');
   }
 }
 
-function startVoice(btn) {
+function cancelVoice() {
+  const overlay = document.getElementById('voice-overlay');
+  if(overlay) overlay.remove();
+}
+
+function startWebSpeech(btn) {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   recognition = new SR();
-
-  // iOS does NOT support continuous mode — it auto-stops after silence
-  // Setting continuous:true on iOS causes the spam loop bug
   recognition.continuous = isIOS ? false : true;
   recognition.interimResults = true;
   recognition.lang = 'en-US';
@@ -1287,38 +1348,23 @@ function startVoice(btn) {
     for(let i = e.resultIndex; i < e.results.length; i++) {
       if(e.results[i].isFinal) final += e.results[i][0].transcript + ' ';
     }
-    if(final) {
-      body.focus();
-      document.execCommand('insertText', false, final);
-      saveNote();
-    }
+    if(final) { body.focus(); document.execCommand('insertText', false, final); saveNote(); }
   };
 
   recognition.onend = () => {
     isListening = false;
     btn.textContent = '🎤 Voice';
     btn.style.background = ''; btn.style.color = ''; btn.style.borderColor = '';
-
-    // On iOS, recognition stops automatically after silence.
-    // Only restart if the user did NOT manually press Stop.
     if(isIOS && !voiceStopped) {
-      setTimeout(() => {
-        if(!voiceStopped) {
-          voiceStopped = false;
-          startVoice(btn);
-        }
-      }, 300);
+      setTimeout(() => { if(!voiceStopped) startWebSpeech(btn); }, 300);
     }
   };
 
   recognition.onerror = (e) => {
-    isListening = false;
-    voiceStopped = true;
+    isListening = false; voiceStopped = true;
     btn.textContent = '🎤 Voice';
     btn.style.background = ''; btn.style.color = ''; btn.style.borderColor = '';
-    if(e.error === 'not-allowed') toast('Mic blocked — allow in settings');
-    else if(e.error === 'no-speech') { /* silently ignore, onend will handle restart */ }
-    else toast('Voice error: ' + e.error);
+    if(e.error !== 'no-speech') toast('Voice error: ' + e.error);
   };
 
   recognition.start();
