@@ -507,6 +507,14 @@ canvas#draw-canvas { flex:1; touch-action:none; cursor:crosshair; display:block;
           </div>
         </div>
       </div>
+      <div style="font-size:11px;font-weight:700;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;margin-top:14px;">AI Features</div>
+      <div class="settings-section">
+        <div class="settings-row" onclick="setGeminiKey()" style="cursor:pointer;">
+          <div class="settings-icon" style="background:rgba(37,99,235,0.1);">🔑</div>
+          <div class="settings-info"><div class="settings-label">Gemini API Key</div><div class="settings-sub" id="gemini-sub">Click to add your API key</div></div>
+          <div class="settings-right" style="color:var(--text3);">›</div>
+        </div>
+      </div>
       <div style="font-size:11px;font-weight:700;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;margin-top:14px;">Data</div>
       <div class="settings-section">
         <div class="settings-row">
@@ -618,7 +626,7 @@ let folders = [
   { id:'school', name:'School', color:2 },
   { id:'ideas', name:'Ideas', color:3 },
 ];
-let settings = { dark:true, geminiKey:'AIzaSyBbKDfDXRSpyT5dX59qpOdQrvYushFOo1k' };
+let settings = { dark:true, geminiKey:'' };
 let curNote = null;
 let curView = 'home';
 let curTab = 'home';
@@ -651,8 +659,6 @@ function load() {
   try { const n = localStorage.getItem('nf_notes'); if(n) notes = JSON.parse(n); } catch(e) {}
   try { const f = localStorage.getItem('nf_folders'); if(f) folders = JSON.parse(f); } catch(e) {}
   try { const s = localStorage.getItem('nf_settings'); if(s) { const parsed = JSON.parse(s); settings = {...settings, ...parsed}; } } catch(e) {}
-  // always keep gemini key hardcoded
-  settings.geminiKey = 'AIzaSyBNsPOg07LIwsV0zdjB0vCEdcBRPVHjzfg';
 }
 
 // ══════════════════════════════════════════════════════
@@ -1060,8 +1066,11 @@ function useTemplate(id) {
 // ══════════════════════════════════════════════════════
 // AI FEATURES
 // ══════════════════════════════════════════════════════
-const GEMINI_API_KEY = 'AIzaSyA2Xd-SJVAzCXLCZKS6HKIWwOO_ypeGK-w';
 const GEMINI_MODEL = 'gemini-2.5-flash';
+
+function getGeminiKey() {
+  return settings.geminiKey || '';
+}
 
 function escapeHTML(str) {
   return String(str)
@@ -1073,7 +1082,12 @@ function escapeHTML(str) {
 }
 
 async function geminiGenerate(prompt) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const apiKey = getGeminiKey();
+  if (!apiKey) {
+    throw new Error('No API key set. Go to Settings > Gemini API Key to add your key.');
+  }
+  
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1227,22 +1241,25 @@ function toggleDark(el) {
   save();
 }
 
-
-
-
 function setGeminiKey() {
-  const key = prompt('Paste your Gemini API key:');
-  if(!key) return;
-  settings.geminiKey = key.trim(); save();
-  document.getElementById('gemini-sub').textContent = 'Key saved ✓';
-  toast('API key saved');
+  const key = prompt('Paste your Gemini API key (get one free at ai.google.dev):', settings.geminiKey || '');
+  if(key === null) return; // User cancelled
+  settings.geminiKey = key.trim(); 
+  save();
+  renderSettingsStats();
+  toast(key.trim() ? 'API key saved' : 'API key cleared');
 }
+
 function renderSettingsStats() {
   const total = notes.filter(n=>!n.deleted).length;
   const fav = notes.filter(n=>n.favorite&&!n.deleted).length;
   const trash = notes.filter(n=>n.deleted).length;
   document.getElementById('settings-stats').textContent = `${total} notes · ${fav} favorites · ${trash} in trash`;
   document.getElementById('dark-toggle').checked = settings.dark;
+  
+  // Update API key status
+  const keyStatus = settings.geminiKey ? 'Key set ✓' : 'Click to add your API key';
+  document.getElementById('gemini-sub').textContent = keyStatus;
 }
 
 function clearTrash() {
