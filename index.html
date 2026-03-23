@@ -21,6 +21,25 @@
 </script>
 <title>Floenotes</title>
 <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://js.puter.com/v2/"></script>
+<script>
+// Dynamically load Puter.js if not already loaded
+function loadPuter() {
+  return new Promise((resolve, reject) => {
+    if(window.puter) { resolve(); return; }
+    const s = document.createElement('script');
+    s.src = 'https://js.puter.com/v2/';
+    s.onload = () => {
+      const wait = setInterval(() => {
+        if(window.puter) { clearInterval(wait); resolve(); }
+      }, 100);
+      setTimeout(() => { clearInterval(wait); reject(new Error('Puter load timeout')); }, 10000);
+    };
+    s.onerror = () => reject(new Error('Failed to load Puter.js'));
+    document.head.appendChild(s);
+  });
+}
+</script>
 <style>
 :root {
   --bg: #f7f6f3;
@@ -1041,6 +1060,39 @@ function useTemplate(id) {
 // ══════════════════════════════════════════════════════
 // AI FEATURES
 // ══════════════════════════════════════════════════════
+const GEMINI_API_KEY = 'AIzaSyA2Xd-SJVAzCXLCZKS6HKIWwOO_ypeGK-w';
+const GEMINI_MODEL = 'gemini-2.5-flash';
+
+function escapeHTML(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function geminiGenerate(prompt) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+    }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if(!res.ok) {
+    const msg = data?.error?.message || `Request failed (${res.status})`;
+    throw new Error(msg);
+  }
+
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  const text = parts.map(p => p?.text || '').join('').trim();
+  return text || 'No response';
+}
+
 async function aiAction(action) {
   const content = document.getElementById('editor-body').innerText.trim();
   const resultArea = document.getElementById('ai-result-area');
@@ -1062,48 +1114,21 @@ async function aiAction(action) {
 
   resultArea.innerHTML = `<div class="ai-loading"><div class="ai-dot"></div><div class="ai-dot"></div><div class="ai-dot"></div><span>AI thinking...</span></div>`;
 
-  // Get API key from settings or prompt
-  let apiKey = settings.geminiKey || '';
-  if(!apiKey) {
-    apiKey = prompt('Enter your Google Gemini API key (free at aistudio.google.com):');
-    if(!apiKey) { resultArea.innerHTML = ''; return; }
-    settings.geminiKey = apiKey.trim();
-    save();
-  }
-
   try {
-  console.log('Using key:', settings.geminiKey);
-  console.log('Action:', action);
-    const apiUrl = `https://openrouter.ai/api/v1/chat/completions`;
-    const res = await fetch(apiUrl, {
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'Authorization': `Bearer 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`,
-        'HTTP-Referer': 'https://noteflow.app',
-      },
-      body:JSON.stringify({
-        model: 'openrouter/auto',
-        messages:[{ role:'user', content: prompts[action] }],
-        max_tokens: 800
-      })
-    });
-    const data = await res.json();
-    if(data.error) { resultArea.innerHTML = `<div class="ai-result" style="color:var(--red);">API Error: ${data.error.message}</div>`; return; }
-    const text = data.choices?.[0]?.message?.content || 'No response';
+    const text = await geminiGenerate(prompts[action]);
 
     if(action === 'tags') {
       const tags = text.split(',').map(t=>t.trim().replace(/[^a-zA-Z0-9]/g,'').toLowerCase()).filter(Boolean).slice(0,5);
       if(curNote) { curNote.tags = tags; save(); }
-      resultArea.innerHTML = `<div class="ai-result"><div class="ai-result-label">🏷️ ${labels[action]}</div>${tags.map(t=>`<span class="tag" style="background:rgba(45,90,39,0.1);color:var(--accent);margin-right:6px;">#${t}</span>`).join('')}</div>`;
+      resultArea.innerHTML = `<div class="ai-result"><div class="ai-result-label">🏷️ ${labels[action]}</div>${tags.map(t=>`<span class="tag" style="background:rgba(45,90,39,0.1);color:var(--accent);margin-right:6px;">#${escapeHTML(t)}</span>`).join('')}</div>`;
     } else if(['fix','bullets','shorter','formal','casual','continue'].includes(action)) {
-      resultArea.innerHTML = `<div class="ai-result"><div class="ai-result-label">✨ ${labels[action]}</div>${text.replace(/\n/g,'<br>')}<div style="display:flex;gap:6px;margin-top:10px;"><button class="ai-chip" onclick="applyAI()" style="flex:1;">Apply</button><button class="ai-chip" style="flex:1;background:rgba(192,57,43,0.1);color:var(--red);border-color:rgba(192,57,43,0.2);" onclick="document.getElementById('ai-result-area').innerHTML=''">Dismiss</button></div></div>`;
+      resultArea.innerHTML = `<div class="ai-result"><div class="ai-result-label">✨ ${labels[action]}</div>${escapeHTML(text).replace(/\n/g,'<br>')}<div style="display:flex;gap:6px;margin-top:10px;"><button class="ai-chip" onclick="applyAI()" style="flex:1;">Apply</button><button class="ai-chip" style="flex:1;background:rgba(192,57,43,0.1);color:var(--red);border-color:rgba(192,57,43,0.2);" onclick="document.getElementById('ai-result-area').innerHTML=''">Dismiss</button></div></div>`;
       resultArea.dataset.aiText = text;
     } else {
-      resultArea.innerHTML = `<div class="ai-result"><div class="ai-result-label">🧠 ${labels[action]}</div>${text.replace(/\n/g,'<br>')}<div style="margin-top:10px;"><button class="ai-chip" style="background:rgba(192,57,43,0.1);color:var(--red);border-color:rgba(192,57,43,0.2);" onclick="document.getElementById('ai-result-area').innerHTML=''">Dismiss</button></div></div>`;
+      resultArea.innerHTML = `<div class="ai-result"><div class="ai-result-label">🧠 ${labels[action]}</div>${escapeHTML(text).replace(/\n/g,'<br>')}<div style="margin-top:10px;"><button class="ai-chip" style="background:rgba(192,57,43,0.1);color:var(--red);border-color:rgba(192,57,43,0.2);" onclick="document.getElementById('ai-result-area').innerHTML=''">Dismiss</button></div></div>`;
     }
   } catch(e) {
-    resultArea.innerHTML = `<div class="ai-result" style="color:var(--red);">Error: ${e.name} — ${e.message}</div>`;
+    resultArea.innerHTML = `<div class="ai-result" style="color:var(--red);">Error: ${escapeHTML(e.message)}</div>`;
     console.error('AI error:', e);
   }
 }
@@ -1111,7 +1136,7 @@ async function aiAction(action) {
 function applyAI() {
   const text = document.getElementById('ai-result-area').dataset.aiText;
   if(!text) return;
-  document.getElementById('editor-body').innerHTML = text.replace(/\n/g,'<br>');
+  document.getElementById('editor-body').innerHTML = escapeHTML(text).replace(/\n/g,'<br>');
   document.getElementById('ai-result-area').innerHTML = '';
   saveNote(); updateWordCount();
   toast('Applied');
@@ -1407,23 +1432,9 @@ async function doTranslate() {
   resultArea.innerHTML = `<div class="ai-loading"><div class="ai-dot"></div><div class="ai-dot"></div><div class="ai-dot"></div><span>Translating to ${lang}...</span></div>`;
 
   try {
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'Authorization': `Bearer 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`,
-        'HTTP-Referer': 'https://noteflow.app',
-      },
-      body: JSON.stringify({
-        model: 'openrouter/auto',
-        messages:[{ role:'user', content:`Translate the following text to ${lang}. Return only the translated text, nothing else:\n\n${content}` }],
-        max_tokens: 1000
-      })
-    });
-    const data = await res.json();
-    if(data.error) { resultArea.innerHTML = `<div class="ai-result" style="color:var(--red);">Error: ${data.error.message}</div>`; return; }
-    const translated = data.choices?.[0]?.message?.content?.trim() || data.choices?.[0]?.text?.trim() || JSON.stringify(data).slice(0,200);
-    resultArea.innerHTML = `<div class="ai-result"><div class="ai-result-label">🌍 ${lang} Translation</div>${translated.replace(/\n/g,'<br>')}<div style="display:flex;gap:6px;margin-top:10px;"><button class="ai-chip" onclick="applyAI()" style="flex:1;">Replace Note</button><button class="ai-chip" style="flex:1;background:rgba(192,57,43,0.1);color:var(--red);border-color:rgba(192,57,43,0.2);" onclick="document.getElementById('ai-result-area').innerHTML=''">Dismiss</button></div></div>`;
+    const prompt = `Translate the following text to ${lang}. Return only the translated text, nothing else:\n\n${content}`;
+    const translated = await geminiGenerate(prompt);
+    resultArea.innerHTML = `<div class="ai-result"><div class="ai-result-label">🌍 ${lang} Translation</div>${escapeHTML(translated).replace(/\n/g,'<br>')}<div style="display:flex;gap:6px;margin-top:10px;"><button class="ai-chip" onclick="applyAI()" style="flex:1;">Replace Note</button><button class="ai-chip" style="flex:1;background:rgba(192,57,43,0.1);color:var(--red);border-color:rgba(192,57,43,0.2);" onclick="document.getElementById('ai-result-area').innerHTML=''">Dismiss</button></div></div>`;
     resultArea.dataset.aiText = translated;
   } catch(e) {
     resultArea.innerHTML = `<div class="ai-result" style="color:var(--red);">Error: ${e.message}</div>`;
